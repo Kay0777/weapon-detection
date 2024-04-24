@@ -1,10 +1,10 @@
 from configparser import ConfigParser
 from argparse import ArgumentParser
-from itertools import product
 from typing import Any
 import ast
 
 from os.path import exists, join, dirname, isfile
+from os import makedirs
 
 
 class SettingsBase(type):
@@ -42,7 +42,7 @@ class Settings(metaclass=SettingsBase):
             "PATH": dirname(__file__),
 
             "CAMERA_IPS": ast.literal_eval(self.clean(config.get('Main Part', 'CAMERA_IPS'))),
-            "LOGIN_PASSWORDS": list(product(
+            "LOGIN_PASSWORDS": list(zip(
                 ast.literal_eval(
                     self.clean(config.get('Main Part', 'CAMERA_LOGINS'))),
                 ast.literal_eval(
@@ -51,6 +51,18 @@ class Settings(metaclass=SettingsBase):
 
             # Getting settings from Main Part
             "ALARM_INTERVAL": int(self.clean(config.get('Main Part', 'ALARM_INTERVAL'))),
+            "LOGGING_FOLDER": join(
+                dirname(__file__),
+                self.clean(config.get('Main Part', 'LOGGING_FOLDER'))),
+            "ERROR_FILENAME": join(
+                dirname(__file__),
+                self.clean(config.get('Main Part', 'LOGGING_FOLDER')),
+                self.clean(config.get('Main Part', 'ERROR_FILENAME'))),
+            "INFO_FILENAME": join(
+                dirname(__file__),
+                self.clean(config.get('Main Part', 'LOGGING_FOLDER')),
+                self.clean(config.get('Main Part', 'INFO_FILENAME'))),
+
             "PER_PROCESS_COUNT": int(self.clean(config.get('Main Part', 'PER_PROCESS_COUNT'))),
             "SCALE": int(self.clean(config.get('Main Part', 'SCALE'))),
             "MAX_QUEUE_SIZE": int(self.clean(config.get('Main Part', 'MAX_QUEUE_SIZE'))),
@@ -112,7 +124,22 @@ class Settings(metaclass=SettingsBase):
         return self.__settings.keys()
 
 
+def Create_Logger_Files(log_folder_path: str, error_file: str, info_file: str) -> None:
+    makedirs(log_folder_path, exist_ok=True)
+
+    if not exists(error_file):
+        open(file=error_file, mode='x')
+
+    if not exists(info_file):
+        open(file=info_file, mode='x')
+
+
 CONF = Settings()
+Create_Logger_Files(
+    log_folder_path=CONF['LOGGING_FOLDER'],
+    error_file=CONF['ERROR_FILENAME'],
+    info_file=CONF['INFO_FILENAME']
+)
 
 if __name__ == '__main__':
     for key, item in CONF.items():

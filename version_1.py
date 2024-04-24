@@ -5,8 +5,12 @@ from src.video_creater_and_sos import (
     Video_Creator_v2,
     Sos_Sender
 )
-
+from src.utils import (
+    Write_Error_MSG,
+    Write_Info_MSG
+)
 import os
+import time
 from queue import Queue
 from threading import Thread
 from multiprocessing import (
@@ -18,22 +22,43 @@ from multiprocessing import (
 from config import CONF
 
 
-def Run_Stream_Process(camera: str, login_passwords: list[tuple[str, str]], video_create_task: Queue):
+def Run_Stream_Process(camera: str, login_passwords: list[tuple[str, str]], video_create_task: Queue, errors_and_info_handle_task: Queue) -> None:
     stream_process = StreamProcessor2(
         camera=camera,
         login_passwords=login_passwords,
-        video_create_task=video_create_task)
+        video_create_task=video_create_task,
+        errors_and_info_handle_task=errors_and_info_handle_task)
     stream_process.start()
 
 
-def Process_Cameras(cameras: tuple[str, list[str]], login_passwords: list[tuple[str, str]], video_create_task: Queue):
+def Process_Cameras(cameras: tuple[str, list[str]], login_passwords: list[tuple[str, str]], video_create_task: Queue, errors_and_info_handle_task: Queue) -> None:
     for camera in cameras:
-        thread = Thread(target=Run_Stream_Process, args=(
-            camera, login_passwords, video_create_task))
+        thread = Thread(
+            target=Run_Stream_Process,
+            args=(camera, login_passwords, video_create_task, errors_and_info_handle_task,))
         thread.start()
 
 
-def Video_Creata_And_Send_Sos(video_tasks: Queue) -> None:
+def Handle_Errors_And_Infos(errors_and_info_handle_task: Queue) -> None:
+    while True:
+        #          60 sec * 5 = 300 secs = 5 min
+        time.sleep(1 * 60 * 5)
+        errors, infos = [], []
+        while not errors_and_info_handle_task.empty():
+            _type, _msg = errors_and_info_handle_task.get()
+            if _type == 'error':
+                errors.append(_msg)
+            else:
+                infos.append(_msg)
+
+        if not errors:
+            Write_Error_MSG(msg=errors)
+
+        if not infos:
+            Write_Info_MSG(msg=infos)
+
+
+def Video_Creata_And_Send_Sos(video_tasks: Queue, errors_and_info_handle_task: Queue) -> None:
     sos_tasks: Queue = Queue()
     # Craete Task threads
     create_video_thread = Thread(
@@ -44,9 +69,15 @@ def Video_Creata_And_Send_Sos(video_tasks: Queue) -> None:
         target=Sos_Sender,
         args=(sos_tasks,))
 
+    write_messages = Thread(
+        target=Handle_Errors_And_Infos,
+        args=(errors_and_info_handle_task, )
+    )
+
     # Run Task threads
     create_video_thread.start()
-    # sos_send_thread.start()
+    sos_send_thread.start()
+    write_messages.start()
 
 
 def main1():
@@ -106,6 +137,8 @@ def main2():
 
     with Manager() as manager:
         video_create_task = manager.Queue()
+        errors_and_info_handle_task = manager.Queue()
+
         processes: list[Process] = []
 
         for i in range(PER_PROCESS_COUNT):
@@ -115,8 +148,9 @@ def main2():
                 continue
 
             # Create and start a Process
-            process = Process(target=Process_Cameras,
-                              args=(camera_subset, login_passwords, video_create_task, ))
+            process = Process(
+                target=Process_Cameras,
+                args=(camera_subset, login_passwords, video_create_task, errors_and_info_handle_task, ))
             process.start()
 
             processes.append(process)
@@ -128,7 +162,7 @@ def main2():
                 os.sched_setaffinity(process.pid, cpu_subset)
 
         video_creater_and_sos_sender_process = Process(target=Video_Creata_And_Send_Sos,
-                                                       args=(video_create_task, ))
+                                                       args=(video_create_task, errors_and_info_handle_task, ))
         video_creater_and_sos_sender_process.start()
         processes.append(video_creater_and_sos_sender_process)
 

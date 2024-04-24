@@ -76,3 +76,22 @@ def Create_Output_Filenames(camera: str) -> tuple[str, str, str, str]:
         real_video_path,
         emit_time
     )
+
+
+def Append_Data(file: str, data: list[str]) -> None:
+    with open(file=file, mode='a') as f:
+        for msg in data:
+            f.write(f'{msg}\n')
+        f.close()
+
+
+def Write_Error_MSG(msg: list[str]) -> None:
+    Append_Data(
+        file=CONF['ERROR_FILENAME'],
+        data=msg)
+
+
+def Write_Info_MSG(msg: list[str]) -> None:
+    Append_Data(
+        file=CONF['INFO_FILENAME'],
+        data=msg)

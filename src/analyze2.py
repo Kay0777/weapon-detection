@@ -19,14 +19,13 @@ from src.utils import Get_Until_This_Frame_ID, SuspiciousPeople
 
 from config import CONF
 
-
 # Set up logging
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
 
 class StreamProcessor:
-    def __init__(self, camera: str, login_passwords: list[tuple[str, str]], video_create_task: Queue) -> None:
+    def __init__(self, camera: str, login_passwords: list[tuple[str, str]], video_create_task: Queue, errors_and_info_handle_task: Queue) -> None:
         self.fps: int = 0
         self.camera: str = camera
         self.shape: Union[None, tuple[int, int]] = None
@@ -38,7 +37,10 @@ class StreamProcessor:
         self.image_counter = 0
 
         self.frame_queue = MaxSizeQueue(maxsize=2)
-        self.timestamps = deque(maxlen=10)
+
+        self.average_fps_in_frame_read = None
+        self.__timestamps_in_frame_read: list = []
+        self.__timestamps_in_analyze: list = []
 
         isavailable = CONF['DEVICE_TYPE'] == 'GPU' and torch.cuda.is_available()
         __device = 'cuda:0' if isavailable else 'cpu'
@@ -56,28 +58,39 @@ class StreamProcessor:
         self.__video_create_task: Queue = video_create_task
         self.__frames: list = []
 
+        self.__errors_and_info_handle_task: Queue = errors_and_info_handle_task
+
         self.__suspicious_people_ids: set = set()
         self.__suspicious_people: list[dict] = []
         self.__tracker: dict = {}
 
     def load_detection_model(self) -> None:
-        weapon_detect_model = CONF['WEAPON_YOLO_MODEL']
-        weapon_detect_task = CONF['WEAPON_TASK']
+        try:
+            weapon_detect_model = CONF['WEAPON_YOLO_MODEL']
+            weapon_detect_task = CONF['WEAPON_TASK']
 
-        self.model = YOLO(model=weapon_detect_model, task=weapon_detect_task)
+            self.model = YOLO(model=weapon_detect_model,
+                              task=weapon_detect_task)
+        except Exception:
+            self.__errors_and_info_handle_task.put(item=(
+                'error', 'Error on Load Detection Model; StreamProcessor def load_detection_model 68 line'))
 
     def load_classification_model(self) -> None:
-        weights = models.EfficientNet_B0_Weights.DEFAULT
-        self.clmodel = models.efficientnet_b0(weights=weights)
+        try:
+            weights = models.EfficientNet_B0_Weights.DEFAULT
+            self.clmodel = models.efficientnet_b0(weights=weights)
 
-        num_features = self.clmodel.classifier[1].in_features
-        self.clmodel.classifier[1] = torch.nn.Linear(num_features, 2)
+            num_features = self.clmodel.classifier[1].in_features
+            self.clmodel.classifier[1] = torch.nn.Linear(num_features, 2)
 
-        weapon_class_model = CONF['WEAPON_CLASSIFY_TORCH_MODEL']
-        model = torch.load(f=weapon_class_model)
-        self.clmodel.load_state_dict(state_dict=model)
-        self.clmodel.to(self.device)
-        self.clmodel.eval()
+            weapon_class_model = CONF['WEAPON_CLASSIFY_TORCH_MODEL']
+            model = torch.load(f=weapon_class_model)
+            self.clmodel.load_state_dict(state_dict=model)
+            self.clmodel.to(self.device)
+            self.clmodel.eval()
+        except Exception:
+            self.__errors_and_info_handle_task.put(
+                item=('error', 'Error on Load Classification Model; StreamProcessor def load_classification_model 74 line'))
 
     def craete_transforms(self) -> None:
         self.transform = transforms.Compose([
@@ -90,28 +103,22 @@ class StreamProcessor:
     def create_rtsp_url(self, login: str, password: str) -> str:
         return f'rtsp://{login}:{password}@{self.camera}:554/cam/realmonitor?channel=1&subtype=0'
 
-    def draw_box(self, frame, box, color=(0, 0, 255)):
-        cv2.rectangle(frame, (int(box.xyxy[0][0]), int(box.xyxy[0][1])), (int(
-            box.xyxy[0][2]), int(box.xyxy[0][3])), color, 8)
-        conf = box.conf.item()
-        track_id = box.id.item()
-
-        label = self.class_labels[int(box.cls.item())]
-        cv2.putText(frame, f'ID: {track_id}, {label}, {conf}', (int(box.xyxy[0][0]), int(
-            box.xyxy[0][1]) - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 5)
-
-    def draw_weapon_box(self, frame, box, color=(0, 0, 255)):
-        x1, y1, x2, y2 = box
-        cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), color, 5)
-
     def boxes_intersect(self, box1: tuple[int, int, int, int], box2: tuple[int, int, int, int]) -> bool:
         # Unpack the coordinates
-        x1_min, y1_min, x1_max, y1_max = box1
-        x2_min, y2_min, x2_max, y2_max = box2
+        try:
+            x1_min, y1_min, x1_max, y1_max = box1
+            x2_min, y2_min, x2_max, y2_max = box2
 
-        # Check for overlap
-        return (x1_min < x2_max and x1_max > x2_min and
-                y1_min < y2_max and y1_max > y2_min)
+            # Check for overlap
+            return (
+                x1_min < x2_max and
+                x1_max > x2_min and
+                y1_min < y2_max and
+                y1_max > y2_min)
+        except Exception:
+            self.__errors_and_info_handle_task.put(item=(
+                'error', 'Error on Boxes Intersect; StreamProcessor def boxes_intersect 107 line'))
+        return False
 
     def __box_args(self, box: Boxes, only_coor: bool = False) -> Union[tuple[tuple[int, int, int, int], int, float, int], tuple[int, int, int, int]]:
         _coors = tuple(int(value) for value in box.xyxy[0].tolist())
@@ -173,6 +180,7 @@ class StreamProcessor:
 
         self.shape = (width, height)
         self.fps = cap.get(cv2.CAP_PROP_FPS)
+        self.average_fps_in_frame_read = self.fps
 
         scale = CONF['SCALE']
         reshape = CONF['VIDEO_SHAPE']
@@ -187,10 +195,21 @@ class StreamProcessor:
                 break
             frame_index += 1
 
+            current_time = time.time()
+            self.__timestamps_in_frame_read.append(current_time)
+            if len(self.__timestamps_in_frame_read) > 5:
+                self.average_fps_in_frame_read = (len(self.__timestamps_in_frame_read) - 1) // \
+                    (self.__timestamps_in_frame_read[-1] -
+                     self.__timestamps_in_frame_read[0])
+                self.__timestamps_in_frame_read.clear()
+
+                item = (
+                    'info', f'Info on Reading Frame From Camera; StreamProcessor FPS average_fps_in_frame_read {self.average_fps_in_frame_read} for {self.camera} time: {current_time}')
+                self.__errors_and_info_handle_task.put(item=item)
+
             _frame = cv2.resize(src=frame, dsize=reshape)
             self.__frames.append((frame_index, _frame))
             self.frame_queue.put((frame_index, frame))
-
         cap.release()
 
     def analyze(self):
@@ -216,12 +235,17 @@ class StreamProcessor:
             # print('in Analyze Frame ID:', frame_index)
             # continue
 
-            # current_time = time.time()
-            # self.timestamps.append(current_time)
-            # if len(self.timestamps) > 1:
-            #     average_fps = (len(self.timestamps) - 1) / \
-            #         (self.timestamps[-1] - self.timestamps[0])
-            #     # self.logger.info(f"FPS: {average_fps} for {self.camera}")
+            current_time = time.time()
+            self.__timestamps_in_analyze.append(current_time)
+            if len(self.__timestamps_in_analyze) > 5:
+                average_fps_in_analyze = (len(self.__timestamps_in_analyze) - 1) // \
+                    (self.__timestamps_in_analyze[-1] -
+                     self.__timestamps_in_analyze[0])
+                self.__timestamps_in_analyze.clear()
+
+                item = (
+                    'info', f'Info on Analysis Frame; StreamProcessor FPS average_fps_in_frame_read {average_fps_in_analyze} for {self.camera} time: {current_time}')
+                self.__errors_and_info_handle_task.put(item=item)
 
             results: Results = self.model.track(
                 source=frame_data,
@@ -242,16 +266,16 @@ class StreamProcessor:
                 detected_people = [
                     box for box in result.boxes if int(box.cls.item()) == 2]
                 if not detected_people:
-                    # print(
-                    #     f'Camera: {self.camera} Frame ID: {frame_index}; People not detected!')
+                    current_time = time.time()
+                    item = (
+                        'info', f'Camera: {self.camera} Frame ID: {frame_index}; People not detected! time: {current_time}')
+                    self.__errors_and_info_handle_task.put(item=item)
                     continue
 
                 # FILTER WEAPONS FROM DETECTED OBJECTS { RIFLE ID: [0] AND PISTOL ID: [1]}
                 detected_weapons = [(box, *self.__box_args(box=box, only_coor=True))
                                     for box in result.boxes if int(box.cls.item()) != 2]
                 if not detected_weapons:
-                    # print(
-                    #     f'Camera: {self.camera} Frame ID: {frame_index}; Weapon not detected!')
                     if self.__suspicious_people_ids:
                         detected_suspicious_people = [
                             self.__box_args(box=box, only_coor=True)
@@ -259,6 +283,11 @@ class StreamProcessor:
                             if box.id is not None and box.id.item() in self.__suspicious_people_ids]
                         info.update({'data': detected_suspicious_people})
                         self.__suspicious_people.append(info)
+
+                    current_time = time.time()
+                    item = (
+                        'info', f'Camera: {self.camera} Frame ID: {frame_index}; Weapon not detected! time: {current_time}')
+                    self.__errors_and_info_handle_task.put(item=item)
                     continue
 
                 # CROP DETECTED WEAPONS AND TRANSFORM TO IMAGE AND CONCATE IMAGE ON TORCH AND SEND TO DEVICE [CPU OR GPU]
@@ -344,12 +373,16 @@ class StreamProcessor:
                                     closest_person_id)
                             self.__tracker.pop(closest_person_id)
                             self.__suspicious_people.clear()
-                        # self.logger.info(msg)
 
+                        current_time = time.time()
+                        item = (
+                            'info',
+                            f'{msg} time: {current_time}'
+                        )
+                        self.__errors_and_info_handle_task.put(item=item)
                 if data:
                     info.update({'data': data})
                     self.__suspicious_people.append(info)
-
             frame_counter += 1
             current_time = time.monotonic()
 
@@ -364,6 +397,7 @@ class StreamProcessor:
                 if frame_to <= self.__frames[-1][0]:
                     self.__video_create_task.put({
                         'camera': self.camera,
+                        'camera_fps': self.average_fps_in_frame_read,
                         'camera_shape': self.shape,
                         'frames': self.__cut_frames(frame_from=frame_from, frame_to=frame_to),
                         'people': self.__suspicious_people

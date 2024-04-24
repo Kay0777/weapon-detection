@@ -58,6 +58,7 @@ def Video_Creator_v2(video_create_task: Queue, sos_tasks: Queue) -> None:
             break
 
         camera: str = task['camera']
+        camera_fps: int = task['camera_fps']
         camera_shape: tuple[int, int] = task['camera_shape']
         frames: list[tuple[int, ndarray]] = task['frames']
         people: list[dict[str, Any]] = task['people']
@@ -73,7 +74,7 @@ def Video_Creator_v2(video_create_task: Queue, sos_tasks: Queue) -> None:
         videoWriter = cv2.VideoWriter(
             filename=real_video_path,
             fourcc=fourcc,
-            fps=fps,
+            fps=camera_fps,
             frameSize=video_shape)
 
         frame_index, _ = frames[0]
