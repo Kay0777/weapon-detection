@@ -162,17 +162,24 @@ class StreamProcessor:
                 login=login,
                 password=password
             ))
+
             if cap.isOpened():
                 connected = True
-                self.logger.info(f"FPS of the camera: {self.fps}")
-                self.logger.info(
-                    f"Successfully opened RTSP stream with login: {login}; password: {password}")
+                current_time = time.time()
+                item = (
+                    'info', f"Successfully opened RTSP stream with login: {login}; password: {password}! The camera: {self.camera} time: {current_time}")
+                self.__errors_and_info_handle_task.put(item=item)
                 break
-            self.logger.warning(
-                f"Failed to open RTSP stream with login: {login}; password: {password}")
+            current_time = time.time()
+            item = (
+                'error', f"Failed to open RTSP stream with login: {login}; password: {password}! The camera: {self.camera} time: {current_time}")
+            self.__errors_and_info_handle_task.put(item=item)
 
         if not connected:
-            self.logger.error("All logins and passwords attempts failed!")
+            current_time = time.time()
+            item = (
+                'error', f"All logins and passwords attempts failed! The camera: {self.camera} time: {current_time}")
+            self.__errors_and_info_handle_task.put(item=item)
             return
 
         width: int = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -191,7 +198,10 @@ class StreamProcessor:
         while True:
             ret, frame = cap.read()
             if not ret:
-                self.logger.error("Failed to read frame from the camera.")
+                current_time = time.time()
+                item = (
+                    'error', f"Failed to read frame from the camera: {self.camera} time: {current_time}")
+                self.__errors_and_info_handle_task.put(item=item)
                 break
             frame_index += 1
 
