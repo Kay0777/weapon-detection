@@ -41,7 +41,7 @@ def Process_Cameras(cameras: tuple[str, list[str]], login_passwords: list[tuple[
 
 def Handle_Errors_And_Infos(errors_and_info_handle_task: Queue) -> None:
     while True:
-        time.sleep(60)  # 1 minute
+        # time.sleep(30)  # 1 minute
         errors, infos = [], []
         while not errors_and_info_handle_task.empty():
             _type, _msg = errors_and_info_handle_task.get()

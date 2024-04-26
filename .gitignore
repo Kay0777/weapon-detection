@@ -1,3 +1,9 @@
 .venv
 videos
 images
+_videos
+logs
+videos__
+a.txt
+a.py
+data.py

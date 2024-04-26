@@ -102,7 +102,7 @@ class Settings(metaclass=SettingsBase):
             "WEAPON_TASK": self.clean(config.get('Model Part', 'WEAPON_TASK')),
 
             # Getting settings from Device Part
-            "DEVICE": self.clean(config.get('Device Part', 'DEVICE_TYPE')),
+            "DEVICE_TYPE": self.clean(config.get('Device Part', 'DEVICE_TYPE')),
         }
 
     def clean(self, value: str) -> str:

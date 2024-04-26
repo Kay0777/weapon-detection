@@ -1,10 +1,11 @@
 from moviepy.editor import VideoFileClip
+from platform import platform
 import base64
 import time
 import os
 
 from config import CONF
-from typing import Any
+from typing import Union, Any
 
 
 class SuspiciousPeople:
@@ -45,6 +46,35 @@ def Compress_Video(input_video_path: str, output_video_path: str, bitrate: str) 
     clip.close()
 
 
+def Create_FFmpeg_CMD(key: str, width: int, height: int, fps: int, rtmp_url: str = 'rtmp://192.168.102.153:1935/live') -> Union[bool, list]:
+    ffmepg = 'ffmpeg'
+    if 'Windows' in platform():
+        ffmepg = 'C:\\ffmpeg\\bin\\ffmpeg.exe'
+        if not os.path.exists(path=ffmepg):
+            return False, []
+
+    return True, [
+        ffmepg,
+        '-y',                                   # Overwrite output files without asking
+        '-f', 'rawvideo',
+        '-threads', '4',
+        '-cpuflags', 'avx2',
+        '-vcodec', 'rawvideo',
+        '-pix_fmt', 'bgr24',
+        '-s', '{}x{}'.format(width, height),
+        '-r', str(fps),                         # Frame rate
+        '-i', '-',                              # Input from stdin
+        '-c:v', 'libx264',
+        # Use ultrafast preset for low-latency encoding
+        '-preset', 'ultrafast',
+        '-tune', 'zerolatency',                 # Tune for zero latency
+        '-pix_fmt', 'yuv420p',
+        '-f', 'flv',
+        '-b:v', '1000K',
+        f'{rtmp_url}/{key}'                     # Output URL
+    ]
+
+
 def Get_Until_This_Frame_ID(alarm_frame_id: int) -> tuple[int, int]:
     fps: int = CONF['FPS']
     seconds_of_waiting: int = CONF['WAIT_SECONDS']
@@ -65,6 +95,8 @@ def Create_Output_Filenames(camera: str) -> tuple[str, str, str, str]:
 
     emit_image_path = os.path.join(
         main_path, f'weapon__{the_time}__image.jpg')
+    full_image_path = os.path.join(
+        main_path, f'weapon__{the_time}_full__image.jpg')
     compressed_video_path = os.path.join(
         main_path, f'weapon__{the_time}__compressed__video.mp4')
     real_video_path = os.path.join(
@@ -72,6 +104,7 @@ def Create_Output_Filenames(camera: str) -> tuple[str, str, str, str]:
 
     return (
         emit_image_path,
+        full_image_path,
         compressed_video_path,
         real_video_path,
         emit_time

@@ -15,7 +15,7 @@ from threading import Thread, Event
 from collections import deque
 from typing import Union
 
-from src.utils import Get_Until_This_Frame_ID
+from src.utils import Get_Until_This_Frame_ID, SuspiciousPeople
 
 from config import CONF
 
@@ -42,7 +42,8 @@ class StreamProcessor:
         self.__timestamps_in_frame_read: list = []
         self.__timestamps_in_analyze: list = []
 
-        __device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
+        isavailable = CONF['DEVICE_TYPE'] == 'GPU' and torch.cuda.is_available()
+        __device = 'cuda:0' if isavailable else 'cpu'
         self.device = torch.device(__device)
 
         self.load_detection_model()
@@ -188,6 +189,7 @@ class StreamProcessor:
         self.fps = cap.get(cv2.CAP_PROP_FPS)
         self.average_fps_in_frame_read = self.fps
 
+        scale = CONF['SCALE']
         reshape = CONF['VIDEO_SHAPE']
 
         # RUN WAITING THREADS
@@ -216,16 +218,13 @@ class StreamProcessor:
                 self.__errors_and_info_handle_task.put(item=item)
 
             _frame = cv2.resize(src=frame, dsize=reshape)
-            if len(self.__frames) == 2000:
-                self.__frames.pop(0)
             self.__frames.append((frame_index, _frame))
             self.frame_queue.put((frame_index, frame))
-
         cap.release()
 
     def analyze(self):
         EMIT_BATCH_SIZE: int = 5
-        EMIT_ON_TIME: int = 2
+        EMIT_ON_TIME: int = 1
 
         alarm_interval: int = CONF['ALARM_INTERVAL']
         min_frame_index: float = float('inf')
@@ -236,14 +235,15 @@ class StreamProcessor:
         last_alarmed_time: Union[None, float] = None
         print('Analysis is waiting untill camera is connected!')
         self.__event.wait()
-        print(f'Analysis is started! The camera:  {self.camera}')
+        print('Analysis is started!')
 
         while True:
             if self.frame_queue.empty():
-                time.sleep(0.1)
                 continue
-
             frame_index, frame_data = self.frame_queue.get()
+
+            # print('in Analyze Frame ID:', frame_index)
+            # continue
 
             current_time = time.time()
             self.__timestamps_in_analyze.append(current_time)
@@ -384,10 +384,12 @@ class StreamProcessor:
                             self.__tracker.pop(closest_person_id)
                             self.__suspicious_people.clear()
 
-                        if msg:
-                            current_time = time.time()
-                            item = ('info', f'{msg} time: {current_time}')
-                            self.__errors_and_info_handle_task.put(item=item)
+                        current_time = time.time()
+                        item = (
+                            'info',
+                            f'{msg} time: {current_time}'
+                        )
+                        self.__errors_and_info_handle_task.put(item=item)
                 if data:
                     info.update({'data': data})
                     self.__suspicious_people.append(info)
@@ -397,21 +399,20 @@ class StreamProcessor:
             # CHECK CAMERA IS ALARMABLE
             # CHECK LAST FRAME INDEX OF FRAMES STACK LESS THAN UNTIL FARME INDEX TO CREATE A VIDEO
             if is_alarmable and (last_alarmed_time is None or alarm_interval <= current_time - last_alarmed_time):
-                # ______________________________________________________'
+                # ______________________________________________________
                 if frame_from == -1 and frame_to == -1:
                     frame_from, frame_to = Get_Until_This_Frame_ID(
                         alarm_frame_id=min_frame_index)
 
                 if frame_to <= self.__frames[-1][0]:
-                    frames = self.__cut_frames(
+                    frame = self.__cut_frames(
                         frame_from=frame_from, frame_to=frame_to)
-
-                    if frames:
+                    if frame:
                         self.__video_create_task.put({
                             'camera': self.camera,
                             'camera_fps': self.average_fps_in_frame_read,
                             'camera_shape': self.shape,
-                            'frames': frames,
+                            'frames': frame,
                             'people': self.__suspicious_people
                         })
 
