@@ -1,3 +1,4 @@
+import cv2
 import pandas as pd
 import numpy as np
 from scipy.signal import savgol_filter
@@ -44,9 +45,6 @@ def Cut_New_Coor(x1: int, y1: int, x2: int, y2: int, w: int, h: int) -> tuple[in
 
 
 def Create_Inretpolate_Person_Coors(frame_ids: list[int], people: list[dict]):
-    print(frame_ids)
-    print(people)
-
     data: list[dict] = []
     index: int = 0
     for frame_id in frame_ids:
@@ -80,4 +78,95 @@ def Create_Inretpolate_Person_Coors(frame_ids: list[int], people: list[dict]):
             interpolated_data.append(
                 {'frame_id': frame_id, 'data': [(x1, y1, x2, y2)]})
 
+    return interpolated_data
+
+
+def Inretpolate_Person_Coordinates(coors: list[dict]) -> list[dict]:
+    data: list[dict] = []
+
+    frame_from = coors[0]['frame_id']
+    frame_to = coors[-1]['frame_id']
+    index = 0
+    for frame_id in range(frame_from, frame_to + 1, 1):
+        if frame_id == coors[index]['frame_id']:
+            data.append(coors[index])
+            index += 1
+        else:
+            data.append({'frame_id': frame_id,
+                         'x1': None, 'y1': None,
+                         'x2': None, 'y2': None})
+    df = pd.DataFrame(data=data)
+    df.interpolate(method='linear', inplace=True)
+    df_int = df.astype(int)
+
+    window_size = 2  # Window size must be a positive odd number
+    poly_order = 1  # Polynomial order to fit in each window
+
+    for column in ['x1', 'y1', 'x2', 'y2']:
+        df[column] = savgol_filter(
+            df[column], window_length=window_size, polyorder=poly_order)
+
+    # Convert DataFrame to list of dictionaries
+    interpolated_data = df_int.to_dict(orient='records')
+    return interpolated_data
+
+
+def interpolate_person_coordinates(coors: list[dict]) -> list[dict]:
+    data = []
+
+    frame_from = coors[0]['frame_id']
+    frame_to = coors[-1]['frame_id']
+    index = 0
+    for frame_id in range(frame_from, frame_to + 1, 1):
+        if index < len(coors) and frame_id == coors[index]['frame_id']:
+            data.append(coors[index])
+            index += 1
+        else:
+            data.append({'frame_id': frame_id, 'x1': None,
+                        'y1': None, 'x2': None, 'y2': None})
+
+    df = pd.DataFrame(data=data)
+    df_int = df.copy()
+
+    # Kalman Filter Initialization
+    # 4 state variables (x, y, dx, dy), 2 measurement variables (x, y)
+    kalman = cv2.KalmanFilter(4, 2)
+
+    # Transition matrix (A)
+    kalman.transitionMatrix = np.array(
+        [[1, 0, 1, 0], [0, 1, 0, 1], [0, 0, 1, 0], [0, 0, 0, 1]], np.float32)
+
+    # Measurement matrix (H)
+    kalman.measurementMatrix = np.array(
+        [[1, 0, 0, 0], [0, 1, 0, 0]], np.float32)
+
+    # Process noise covariance (Q)
+    kalman.processNoiseCov = np.array(
+        [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]], np.float32) * 0.03
+
+    # Measurement noise covariance (R)
+    kalman.measurementNoiseCov = np.array([[1, 0], [0, 1]], np.float32) * 0.1
+
+    for i, row in df_int.iterrows():
+        if not pd.isnull(row[['x1', 'y1', 'x2', 'y2']]).all():
+            # If the coordinates are available, update the Kalman filter with the measurement
+            measurement = np.array(
+                [row['x1'], row['y1'], row['x2'], row['y2']], dtype=np.float32).reshape((1, 4))
+            kalman.correct(measurement)
+
+        # Predict the next state
+        prediction = kalman.predict()
+
+        # Update the DataFrame with the predicted coordinates
+        df_int.loc[i, ['x1', 'y1', 'x2', 'y2']
+                   ] = prediction.ravel().astype(int)
+
+    # Apply Savitzky-Golay filter for smoothing
+    window_size = 3
+    poly_order = 2
+    for column in ['x1', 'y1', 'x2', 'y2']:
+        df_int[column] = savgol_filter(
+            df_int[column], window_length=window_size, polyorder=poly_order)
+
+    interpolated_data = df_int.to_dict(orient='records')
     return interpolated_data

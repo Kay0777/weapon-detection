@@ -75,13 +75,12 @@ def Create_FFmpeg_CMD(key: str, width: int, height: int, fps: int, rtmp_url: str
     ]
 
 
-def Get_Until_This_Frame_ID(alarm_frame_id: int) -> tuple[int, int]:
-    fps: int = CONF['FPS']
+def Get_Until_This_Frame_ID(alarm_frame_id: int, camera_fps: int) -> tuple[int, int]:
     seconds_of_waiting: int = CONF['WAIT_SECONDS']
     video_length: int = CONF['VIDEO_LENGTH']
 
-    frame_from = max(1, alarm_frame_id - fps * seconds_of_waiting)
-    frame_to = frame_from + fps * video_length
+    frame_from = max(1, alarm_frame_id - camera_fps * seconds_of_waiting)
+    frame_to = frame_from + camera_fps * video_length
 
     return frame_from, frame_to
 

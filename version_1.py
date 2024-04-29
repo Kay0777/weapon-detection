@@ -1,8 +1,6 @@
-from src import StreamProcessor1
 from src import StreamProcessor2
 from src.video_creater_and_sos import (
-    Video_Creator_v1,
-    Video_Creator_v2,
+    Video_Creator,
     Sos_Sender
 )
 from src.utils import (
@@ -61,8 +59,7 @@ def Video_Creata_And_Send_Sos(video_tasks: Queue, errors_and_info_handle_task: Q
     sos_tasks: Queue = Queue()
     # Craete Task threads
     create_video_thread = Thread(
-        # target=Video_Creator_v1,
-        target=Video_Creator_v2,
+        target=Video_Creator,
         args=(video_tasks, sos_tasks,))
     sos_send_thread = Thread(
         target=Sos_Sender,
