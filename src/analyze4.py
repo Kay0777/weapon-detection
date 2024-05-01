@@ -63,6 +63,8 @@ class StreamProcessor:
         self.__suspicious_people: dict = {}
         self.__tracker: dict = {}
 
+        self.__track_frame_info: dict = {}
+
     def load_detection_model(self) -> None:
         try:
             weapon_detect_model = CONF['WEAPON_YOLO_MODEL']
@@ -168,33 +170,33 @@ class StreamProcessor:
         self.__errors_and_info_handle_task.put(item=item)
 
     def frame_reader(self):
-        # connected = False
-        # for login, password in self.login_passwords:
-        #     cap = cv2.VideoCapture(self.create_rtsp_url(
-        #         login=login,
-        #         password=password
-        #     ))
+        connected = False
+        for login, password in self.login_passwords:
+            cap = cv2.VideoCapture(self.create_rtsp_url(
+                login=login,
+                password=password
+            ))
 
-        #     if cap.isOpened():
-        #         connected = True
-        #         current_time = time.time()
-        #         item = (
-        #             'info', f"Successfully opened RTSP stream with login: {login}; password: {password}! The camera: {self.camera} time: {current_time}")
-        #         self.__errors_and_info_handle_task.put(item=item)
-        #         break
-        #     current_time = time.time()
-        #     item = (
-        #         'error', f"Failed to open RTSP stream with login: {login}; password: {password}! The camera: {self.camera} time: {current_time}")
-        #     self.__errors_and_info_handle_task.put(item=item)
+            if cap.isOpened():
+                connected = True
+                current_time = time.time()
+                item = (
+                    'info', f"Successfully opened RTSP stream with login: {login}; password: {password}! The camera: {self.camera} time: {current_time}")
+                self.__errors_and_info_handle_task.put(item=item)
+                break
+            current_time = time.time()
+            item = (
+                'error', f"Failed to open RTSP stream with login: {login}; password: {password}! The camera: {self.camera} time: {current_time}")
+            self.__errors_and_info_handle_task.put(item=item)
 
-        # if not connected:
-        #     current_time = time.time()
-        #     item = (
-        #         'error', f"All logins and passwords attempts failed! The camera: {self.camera} time: {current_time}")
-        #     self.__errors_and_info_handle_task.put(item=item)
-        #     return
+        if not connected:
+            current_time = time.time()
+            item = (
+                'error', f"All logins and passwords attempts failed! The camera: {self.camera} time: {current_time}")
+            self.__errors_and_info_handle_task.put(item=item)
+            return
 
-        cap = cv2.VideoCapture('DJI_0036.MOV')
+        # cap = cv2.VideoCapture('DJI_0033.MOV')
 
         width: int = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height: int = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -237,7 +239,6 @@ class StreamProcessor:
             self.frame_queue.put((frame_index, frame))
 
         self.frame_queue.put((-1, None))
-        self.__frames.clear()
         cap.release()
 
     def analyze(self):
@@ -247,6 +248,7 @@ class StreamProcessor:
         print('Analysis is waiting untill camera is connected!')
         self.__event.wait()
         frame_counter: int = 0
+        min_frame_index: int = 1
         print(f'Analysis is started! The camera:  {self.camera}')
         while True:
             if self.frame_queue.empty():
@@ -280,16 +282,31 @@ class StreamProcessor:
             if not results:
                 continue
 
-            # FULL INFO OF CURRENT ANALYZED FRAME INFO
-            info = {}
+            # WORK WITH RESULTS
             for result in results:
                 # FILTER PEOPLE FROM DETECTED OBJECTS
                 detected_people = [
                     box for box in result.boxes if int(box.cls.item()) == 2]
+
+                # continue
                 if not detected_people:
                     self.write_message(
                         message=f'Camera: {self.camera} Frame ID: {frame_index}; People not detected!')
                     continue
+
+                # print(frame_index, 'detected_people', len(detected_people), [
+                #       int(box.id.item()) for box in detected_people])
+
+                detected_people_on_frame_info: dict = {}
+                for box in detected_people:
+                    if box.id is not None and box.id.item():
+                        x1, y1, x2, y2 = self.__box_args(
+                            box=box, only_coor=True)
+                        person_id: int = int(box.id.item())
+                        detected_people_on_frame_info[person_id] = {
+                            'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2, }
+                if detected_people_on_frame_info:
+                    self.__track_frame_info[frame_index] = detected_people_on_frame_info
 
                 # FILTER WEAPONS FROM DETECTED OBJECTS { RIFLE ID: [0] AND PISTOL ID: [1]}
                 detected_weapons = [(box, *self.__box_args(box=box, only_coor=True))
@@ -299,14 +316,10 @@ class StreamProcessor:
                     if self.__tracker:
                         for box in detected_people:
                             if box.id is not None and box.id.item() and int(box.id.item()) in self.__tracker:
-                                x1, y1, x2, y2 = self.__box_args(box=closest_person,
-                                                                 only_coor=True)
-                                info = {'frame_id': frame_index,
-                                        'x1': x1, 'y1': y1,
-                                        'x2': x2, 'y2': y2, }
-                                data: list = self.__tracker[int(
-                                    box.id.item())]['data']
-                                data.append(info)
+                                person_id: int = int(box.id.item())
+                                detected_on_frames: list = self.__tracker[person_id
+                                                                          ]['detected_on_frames']
+                                detected_on_frames.append(frame_index)
                     self.write_message(
                         message=f"Camera: {self.camera} Frame ID: {frame_index}; Weapon not detected!")
                     continue
@@ -336,27 +349,22 @@ class StreamProcessor:
                             continue
 
                         # GET DETECTED WEAPON BOXES INFO
-                        box, *_ = detected_weapons[i]
+                        box_1, *_ = detected_weapons[i]
                         # FILTER INTERSECTED PEOPLE
                         intersecting_detected_people = [box_2
                                                         for box_2 in detected_people
-                                                        if self.boxes_intersect(box.xyxy[0], box_2.xyxy[0])]
+                                                        if self.boxes_intersect(box_1.xyxy[0], box_2.xyxy[0])]
                         # IF NOT INTERSECTED PEOPLE LOOP CONTINUE TO NEXT DETECTED DATA
                         if not intersecting_detected_people:
                             continue
 
                         # GET CLOSEST SUSPICIOUS PERSON
                         closest_person: Boxes = min(intersecting_detected_people,
-                                                    key=lambda _box: (_box.xyxy[0] - box.xyxy[0]).pow(2).sum())
+                                                    key=lambda box_2: (box_1.xyxy[0] - box_2.xyxy[0]).pow(2).sum())
                         if closest_person.id is None:
                             continue
 
                         # # APPEND CLOSEST SUSPICIOUS PERSON
-                        x1, y1, x2, y2 = self.__box_args(box=closest_person,
-                                                         only_coor=True)
-                        info = {'frame_id': frame_index, 'x1': x1,
-                                'y1': y1, 'x2': x2, 'y2': y2, }
-
                         closest_person_id = int(closest_person.id.item())
                         if closest_person_id not in self.__tracker:
                             self.write_message(
@@ -364,24 +372,32 @@ class StreamProcessor:
                             self.__tracker[closest_person_id] = {
                                 'counter':  1,
                                 'is_alarmable': False,
+                                'is_sos_sent': False,
                                 'frame_counter': frame_counter,
                                 'detected_frame_id': frame_index,
                                 'frame_from': 0,
                                 'frame_to': 0,
-                                'data': [info]
+                                'detected_on_frames': [frame_index],
                             }
+                            print('Added:', closest_person_id)
+
                         elif self.__tracker[closest_person_id]['counter'] < EMIT_BATCH_SIZE - 1:
                             self.write_message(
                                 message=f"Person with weapon detected {closest_person_id}; Camera: {self.camera}")
                             person: dict = self.__tracker[closest_person_id]
                             person['counter'] += 1
-                            person['data'].append(info)
+                            person['detected_on_frames'].append(frame_index)
+
                         elif self.__tracker[closest_person_id]['counter'] == EMIT_BATCH_SIZE:
                             person: dict = self.__tracker[closest_person_id]
-                            person['data'].append(info)
+                            person['detected_on_frames'].append(frame_index)
+
                         elif (frame_counter - self.__tracker[closest_person_id]['frame_counter']) / self.fps <= EMIT_ON_TIME:
                             self.write_message(
                                 message=f"Alarm is confirmed {closest_person_id}; Camera: {self.camera}")
+
+                            self.__suspicious_people_ids.add(closest_person_id)
+
                             person: dict = self.__tracker[closest_person_id]
                             frame_from, frame_to = Get_Until_This_Frame_ID(
                                 alarm_frame_id=person['detected_frame_id'],
@@ -389,34 +405,47 @@ class StreamProcessor:
                             person.update(
                                 {'frame_from': frame_from, 'frame_to': frame_to, 'is_alarmable': True})
                             person['counter'] += 1
-                            person['data'].append(info)
+                            person['detected_on_frames'].append(frame_index)
+
+                            # UPDATE min frame index TO CLEAN STACKED DATA
+                            min_frame_index = max(min_frame_index, frame_from)
+
                         else:
                             self.write_message(
                                 message=f"Alarm was not confirmed, {frame_counter}, FPS: {self.fps}; Camera: {self.camera}")
                             self.__tracker.pop(closest_person_id)
             frame_counter += 1
+            sos_sent_people = tuple(id for id in self.__tracker.keys()
+                                    if self.__tracker[id]['is_sos_sent'] and
+                                    self.__tracker[id]['frame_to'] < min_frame_index)
+            if sos_sent_people:
+                for person_id in sos_sent_people:
+                    self.__tracker.pop(person_id)
+                    self.__suspicious_people_ids.remove(person_id)
 
             # CHECK CAMERA IS ALARMABLE
             # CHECK LAST FRAME INDEX OF FRAMES STACK LESS THAN UNTIL FARME INDEX TO CREATE A VIDEO
             is_alarmable_people = tuple(id for id in self.__tracker.keys()
-                                        if self.__tracker[id]['is_alarmable'])
+                                        if self.__tracker[id]['is_alarmable'] and
+                                        not self.__tracker[id]['is_sos_sent'] and
+                                        self.__tracker[id]['frame_to'] <= self.__frames[-1][0])
             for person_id in is_alarmable_people:
-                is_person_video_creatable = self.__tracker[person_id]['frame_to'] <= self.__frames[-1][0]
-                if is_person_video_creatable:
-                    frames = self.__cut_frames(
-                        frame_from=frame_from, frame_to=frame_to)
-                    self.__video_create_task.put({
-                        'camera': self.camera,
-                        'person': person_id,
-                        'camera_fps': max(CONF['FPS'], min(int(self.fps), int(self.average_fps_in_frame_read))),
-                        'camera_shape': self.shape,
-                        'frames': frames,
-                        'people': self.__tracker[person_id]['data']
-                    })
-                    self.__tracker.pop(person_id)
-                    print('Alarmed for this Person:', person_id)
+                frames = self.__cut_frames(
+                    frame_from=frame_from, frame_to=frame_to)
+                self.__video_create_task.put({
+                    'camera': self.camera,
+                    'person': person_id,
+                    'camera_fps': max(CONF['FPS'], min(int(self.fps), int(self.average_fps_in_frame_read))),
+                    'camera_shape': self.shape,
+                    'frames': frames,
+                    'suspicious': self.__suspicious_people_ids,
+                    'people': self.__track_frame_info
+                })
+                self.__tracker[person_id]['is_sos_sent'] = True
 
-        print('Analyze task is done!!')
+        del self.__track_frame_info
+        del self.__tracker
+        print('Analyze is Done!')
 
     def start(self):
         reader_thread = Thread(target=self.frame_reader)

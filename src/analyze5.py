@@ -274,8 +274,8 @@ class StreamProcessor:
                 persist=True,
                 verbose=False,
                 imgsz=960,
-                conf=0.4,
-                iou=0.45,
+                # conf=0.4,
+                # iou=0.45,
                 tracker='botsort.yaml')
             if not results:
                 continue
@@ -361,6 +361,10 @@ class StreamProcessor:
                         if closest_person_id not in self.__tracker:
                             self.write_message(
                                 message=f"Person with weapon detected {closest_person_id}; Camera: {self.camera}")
+
+                            for person_id in self.__tracker.keys():
+                                self.__tracker[person_id]['data'].append(info)
+
                             self.__tracker[closest_person_id] = {
                                 'counter':  1,
                                 'is_alarmable': False,
@@ -370,15 +374,18 @@ class StreamProcessor:
                                 'frame_to': 0,
                                 'data': [info]
                             }
+
                         elif self.__tracker[closest_person_id]['counter'] < EMIT_BATCH_SIZE - 1:
                             self.write_message(
                                 message=f"Person with weapon detected {closest_person_id}; Camera: {self.camera}")
                             person: dict = self.__tracker[closest_person_id]
                             person['counter'] += 1
                             person['data'].append(info)
+
                         elif self.__tracker[closest_person_id]['counter'] == EMIT_BATCH_SIZE:
                             person: dict = self.__tracker[closest_person_id]
                             person['data'].append(info)
+
                         elif (frame_counter - self.__tracker[closest_person_id]['frame_counter']) / self.fps <= EMIT_ON_TIME:
                             self.write_message(
                                 message=f"Alarm is confirmed {closest_person_id}; Camera: {self.camera}")
@@ -390,6 +397,7 @@ class StreamProcessor:
                                 {'frame_from': frame_from, 'frame_to': frame_to, 'is_alarmable': True})
                             person['counter'] += 1
                             person['data'].append(info)
+
                         else:
                             self.write_message(
                                 message=f"Alarm was not confirmed, {frame_counter}, FPS: {self.fps}; Camera: {self.camera}")

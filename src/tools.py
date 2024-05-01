@@ -44,57 +44,7 @@ def Cut_New_Coor(x1: int, y1: int, x2: int, y2: int, w: int, h: int) -> tuple[in
     return _x1, _y1, _x2, _y2
 
 
-def Create_Inretpolate_Person_Coors(frame_ids: list[int], people: list[dict]):
-    data: list[dict] = []
-    index: int = 0
-    for frame_id in frame_ids:
-        x1, y1, x2, y2 = None, None, None, None
-
-        if index < len(people):
-            person = people[index]
-            if person['frame_id'] == frame_id and person['data']:
-                index += 1
-                x1, y1, x2, y2 = person['data'][0]
-        data.append({'frame_id': frame_id, 'x1': x1,
-                     'y1': y1, 'x2': x2, 'y2': y2, })
-
-    df = pd.DataFrame(data=data)
-    df.interpolate(method='linear', inplace=True)
-
-    window_size = 5  # Window size must be a positive odd number
-    poly_order = 2  # Polynomial order to fit in each window
-
-    for column in ['x1', 'y1', 'x2', 'y2']:
-        df[column] = savgol_filter(
-            df[column], window_length=window_size, polyorder=poly_order)
-
-    interpolated_data = []
-    for _, row in df.iterrows():
-        frame_id = row['frame_id']
-        x1, y1, x2, y2 = row['x1'], row['y1'], row['x2'], row['y2']
-        if not any(np.isnan([x1, y1, x2, y2])):
-            # Convert x1, y1, x2, y2 to integers
-            x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
-            interpolated_data.append(
-                {'frame_id': frame_id, 'data': [(x1, y1, x2, y2)]})
-
-    return interpolated_data
-
-
-def Inretpolate_Person_Coordinates(coors: list[dict]) -> list[dict]:
-    data: list[dict] = []
-
-    frame_from = coors[0]['frame_id']
-    frame_to = coors[-1]['frame_id']
-    index = 0
-    for frame_id in range(frame_from, frame_to + 1, 1):
-        if frame_id == coors[index]['frame_id']:
-            data.append(coors[index])
-            index += 1
-        else:
-            data.append({'frame_id': frame_id,
-                         'x1': None, 'y1': None,
-                         'x2': None, 'y2': None})
+def Interpolate(data: list[dict]) -> list[dict]:
     df = pd.DataFrame(data=data)
     df.interpolate(method='linear', inplace=True)
     df_int = df.astype(int)
@@ -109,6 +59,70 @@ def Inretpolate_Person_Coordinates(coors: list[dict]) -> list[dict]:
     # Convert DataFrame to list of dictionaries
     interpolated_data = df_int.to_dict(orient='records')
     return interpolated_data
+
+
+def Create_Interpolate_Person_Coors(frame_ids: list[int], people: list[dict]):
+    data: list[dict] = []
+    index: int = 0
+    for frame_id in frame_ids:
+        x1, y1, x2, y2 = None, None, None, None
+
+        if index < len(people):
+            person = people[index]
+            if person['frame_id'] == frame_id and person['data']:
+                index += 1
+                x1, y1, x2, y2 = person['data'][0]
+        data.append({'frame_id': frame_id, 'x1': x1,
+                     'y1': y1, 'x2': x2, 'y2': y2, })
+
+    return Interpolate(data=data)
+
+
+def Interpolate_Person_Coordinates_V1(coors: list[dict]) -> list[dict]:
+    data: list[dict] = []
+
+    frame_from = coors[0]['frame_id']
+    frame_to = coors[-1]['frame_id']
+    index = 0
+    for frame_id in range(frame_from, frame_to + 1, 1):
+        if frame_id == coors[index]['frame_id']:
+            data.append(coors[index])
+            index += 1
+        else:
+            data.append({'frame_id': frame_id,
+                         'x1': None, 'y1': None,
+                         'x2': None, 'y2': None})
+
+    return Interpolate(data=data)
+
+
+def Interpolate_Person_Coordinates_V2(people: dict[int, dict[int, dict]], frame_ids: list[int], suspicious: set[int]) -> dict[int, dict]:
+    first_frame_id: int = list(people.keys())[0]
+    while frame_ids[0] < first_frame_id:
+        frame_ids.pop(0)
+
+    info: dict[int, list[dict]] = {person_id: [] for person_id in suspicious}
+    for frame_id in frame_ids:
+        if frame_id in people:
+            for person_id in people[frame_id].keys():
+                if person_id in suspicious:
+                    df = {'frame_id': frame_id, **people[frame_id][person_id]}
+                    info[person_id].append(df)
+        else:
+            for person_id in suspicious:
+                if info[person_id]:
+                    info[person_id].append(
+                        {'frame_id': frame_id, 'x1': None, 'y1': None, 'x2': None, 'y2': None})
+
+    all_data = {}
+    for person_id in info.keys():
+        data = Interpolate(data=info[person_id])
+        for dt in data:
+            frame_id = dt['frame_id']
+            coor = {'x1': dt['x1'], 'y1': dt['y1'],
+                    'x2': dt['x2'], 'y2': dt['y2']}
+            all_data.setdefault(frame_id, {}).update({person_id: coor})
+    return all_data
 
 
 def interpolate_person_coordinates(coors: list[dict]) -> list[dict]:

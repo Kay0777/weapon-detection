@@ -9,8 +9,9 @@ __all__ = (
     'StreamProcessor2'
 )
 
-from src.analyze1 import StreamProcessor as StreamProcessor1
-from src.analyze2 import StreamProcessor as StreamProcessor2
+# from src.analyze1 import StreamProcessor as StreamProcessor1
+# from src.analyze2 import StreamProcessor as StreamProcessor2
+from src.analyze4 import StreamProcessor as StreamProcessor2
 
 # import cv2
 # import torch

@@ -15,8 +15,9 @@ from src.utils import (
 from src.tools import (
     Cut_New_Coor,
     Transform_Point,
-    Inretpolate_Person_Coordinates,
-    Create_Inretpolate_Person_Coors,
+    Interpolate_Person_Coordinates_V1,
+    Interpolate_Person_Coordinates_V2,
+    Create_Interpolate_Person_Coors,
     interpolate_person_coordinates
 )
 
@@ -51,7 +52,6 @@ def Sos_Sender(sos_tasks: Queue) -> None:
         if data is None:
             break
 
-        print('_______________________________________________________________________')
         data.update({
             "event_photo": File_Convert_To_Base64(filename=data['event_photo']),
             "full_photo": File_Convert_To_Base64(filename=data['full_photo']),
@@ -165,7 +165,7 @@ def Create_Video_v2(task: dict, sos_tasks: Queue) -> None:
         suspicious_people_frame_id = info['frame_id']
 
     frame_ids = [frame_index for frame_index, _ in frames]
-    people = Create_Inretpolate_Person_Coors(frame_ids=frame_ids,
+    people = Create_Interpolate_Person_Coors(frame_ids=frame_ids,
                                              people=people)
 
     image_saved = False
@@ -238,7 +238,7 @@ def Create_Video_v3(task: dict, sos_tasks: Queue) -> None:
         emit_time
     ) = Create_Output_Filenames(camera=camera)
 
-    people = Inretpolate_Person_Coordinates(coors=people)
+    people = Interpolate_Person_Coordinates_V1(coors=people)
     # people = interpolate_person_coordinates(coors=people)
 
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
@@ -286,24 +286,108 @@ def Create_Video_v3(task: dict, sos_tasks: Queue) -> None:
         videoWriter.release()
 
     print('Video is done!')
+    print('# $ _____________________________________________________________________________ $ #')
+    print('# $ ______________  V I D E O   C R E A T I N G  I S  S T A R T E D _____________ $ #')
+    Compress_Video(
+        input_video_path=real_video_path,
+        output_video_path=compressed_video_path,
+        bitrate=bitrate)
+    print('# $ _________________________  V I D E O   C R E A T E D ________________________ $ #')
+    print('# $ _____________________________________________________________________________ $ #')
 
-    # print('# $ _____________________________________________________________________________ $ #')
-    # print('# $ ______________  V I D E O   C R E A T I N G  I S  S T A R T E D _____________ $ #')
-    # Compress_Video(
-    #     input_video_path=real_video_path,
-    #     output_video_path=compressed_video_path,
-    #     bitrate=bitrate)
-    # print('# $ _________________________  V I D E O   C R E A T E D ________________________ $ #')
-    # print('# $ _____________________________________________________________________________ $ #')
+    print('Alarm send task is added...')
+    sos_tasks.put({
+        'camera_ip': camera,
+        'the_date': emit_time,
+        'event_photo': emit_image_path,
+        'full_photo': full_image_path,
+        'source': compressed_video_path,
+    })
+    VIDEO_CREATE_COUNTER += 1
 
-    # print('Alarm send task is added...')
-    # sos_tasks.put({
-    #     'camera_ip': camera,
-    #     'the_date': emit_time,
-    #     'event_photo': emit_image_path,
-    #     'full_photo': full_image_path,
-    #     'source': compressed_video_path,
-    # })
+
+def Create_Video_v4(task: dict, sos_tasks: Queue) -> None:
+    global VIDEO_CREATE_COUNTER
+
+    video_shape = CONF['VIDEO_SHAPE']
+    color = CONF['PERSON_WITH_WEAPON']
+    bitrate = CONF['BITRATE']
+
+    camera: str = task['camera']
+    person: int = task['person']
+    camera_fps: int = task['camera_fps']
+    camera_shape: tuple[int, int] = task['camera_shape']
+    frames: list[tuple[int, ndarray]] = task['frames']
+    suspicious: set[int] = task['suspicious']
+    people: dict[int, dict] = task['people']
+
+    (
+        emit_image_path,
+        full_image_path,
+        compressed_video_path,
+        real_video_path,
+        emit_time
+    ) = Create_Output_Filenames(camera=camera)
+
+    frame_ids = [frame_index for frame_index, _ in frames]
+    people: dict[int, dict] = Interpolate_Person_Coordinates_V2(people=people,
+                                                                frame_ids=frame_ids,
+                                                                suspicious=suspicious)
+
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    videoWriter = cv2.VideoWriter(
+        filename=real_video_path,
+        fourcc=fourcc,
+        fps=camera_fps,
+        frameSize=video_shape)
+
+    image_saved = False
+    for frame_index, frame_data in frames:
+        if frame_index in people:
+            for person_id in people[frame_index].keys():
+                point = (people[frame_index][person_id]['x1'], people[frame_index][person_id]['y1'],
+                         people[frame_index][person_id]['x2'], people[frame_index][person_id]['y2'])
+                x1, y1, x2, y2 = Transform_Point(point=point,
+                                                 from_shape=camera_shape,
+                                                 to_shape=video_shape)
+                cv2.rectangle(img=frame_data,
+                              pt1=(x1, y1), pt2=(x2, y2),
+                              color=color, thickness=2, lineType=2)
+                if not image_saved and person_id == person:
+                    # Save full image
+                    cv2.imwrite(filename=full_image_path, img=frame_data)
+
+                    # Save human image
+                    w, h = frame_data.shape[:2][::-1]
+                    _x1, _y1, _x2, _y2 = Cut_New_Coor(x1, y1, x2, y2, w, h)
+                    __only_human = frame_data[_y1:_y2, _x1:_x2]
+                    cv2.imwrite(filename=emit_image_path, img=__only_human)
+                    image_saved = True
+
+        videoWriter.write(image=frame_data)
+
+    if videoWriter.isOpened():
+        videoWriter.release()
+
+    print('Video is done!')
+
+    print('# $ _____________________________________________________________________________ $ #')
+    print('# $ ______________  V I D E O   C R E A T I N G  I S  S T A R T E D _____________ $ #')
+    Compress_Video(
+        input_video_path=real_video_path,
+        output_video_path=compressed_video_path,
+        bitrate=bitrate)
+    print('# $ _________________________  V I D E O   C R E A T E D ________________________ $ #')
+    print('# $ _____________________________________________________________________________ $ #')
+
+    print('Alarm send task is added...')
+    sos_tasks.put({
+        'camera_ip': camera,
+        'the_date': emit_time,
+        'event_photo': emit_image_path,
+        'full_photo': full_image_path,
+        'source': compressed_video_path,
+    })
     VIDEO_CREATE_COUNTER += 1
 
 
@@ -325,7 +409,7 @@ def Video_Creator(video_create_task: Queue, sos_tasks: Queue) -> None:
 
         VIDEO_CREATE_COUNTER -= 1
         thread = Thread(
-            target=Create_Video_v3,
+            target=Create_Video_v4,
             args=(task, sos_tasks,)
         )
         thread.start()
